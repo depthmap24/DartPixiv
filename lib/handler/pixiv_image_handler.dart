@@ -283,7 +283,6 @@ Future<void> processImageMetadataFromDb({
         notifier: notifier,
       );
       done++;
-      await pixiv_helper.wait(pixiv_constant.PIXIVUTIL_OK, config);
     } catch (e) {
       failed++;
       pixiv_helper.printAndLog(
