@@ -137,25 +137,27 @@ Future<int> processImage({
       _touchFiles(downloadedPaths, image.worksDateDateTime);
     }
 
-    caller.dbManager.insertImage(imageId, resolvedArtist?.artistId ?? 0,
+    caller.dbManager.runInTransaction(() {
+      caller.dbManager.insertImage(imageId, resolvedArtist?.artistId ?? 0,
+          title: image.imageTitle,
+          saveName: image.imageUrls.join(','),
+          isManga: image.imageMode == 'manga' ? 'Y' : 'N',
+          caption: image.imageCaption);
+      caller.dbManager.insertDownloadMetadata(
+        imageId: imageId,
         title: image.imageTitle,
-        saveName: image.imageUrls.join(','),
-        isManga: image.imageMode == 'manga' ? 'Y' : 'N',
-        caption: image.imageCaption);
-    caller.dbManager.insertDownloadMetadata(
-      imageId: imageId,
-      title: image.imageTitle,
-      caption: image.imageCaption,
-      tags: image.imageTags,
-      pages: image.imageCount,
-      worksDate: image.worksDate,
-      totalViews: image.jd_rtv,
-      totalRating: image.jd_rtc,
-      bookmarkCount: image.bookmark_count,
-    );
-    if (image.ai_type > 0) {
-      caller.dbManager.insertAiInfo(imageId, image.ai_type);
-    }
+        caption: image.imageCaption,
+        tags: image.imageTags,
+        pages: image.imageCount,
+        worksDate: image.worksDate,
+        totalViews: image.jd_rtv,
+        totalRating: image.jd_rtc,
+        bookmarkCount: image.bookmark_count,
+      );
+      if (image.ai_type > 0) {
+        caller.dbManager.insertAiInfo(imageId, image.ai_type);
+      }
+    });
 
     return allOk
         ? pixiv_constant.PIXIVUTIL_OK
@@ -184,28 +186,30 @@ Future<void> processImageMetadata({
   );
   image.printInfo();
   final resolvedArtist = image.artist;
-  caller.dbManager.insertImage(
-    imageId,
-    resolvedArtist?.artistId ?? 0,
-    title: image.imageTitle,
-    saveName: image.imageUrls.join(','),
-    isManga: image.imageMode == 'manga' ? 'Y' : 'N',
-    caption: image.imageCaption,
-  );
-  caller.dbManager.insertDownloadMetadata(
-    imageId: imageId,
-    title: image.imageTitle,
-    caption: image.imageCaption,
-    tags: image.imageTags,
-    pages: image.imageCount,
-    worksDate: image.worksDate,
-    totalViews: image.jd_rtv,
-    totalRating: image.jd_rtc,
-    bookmarkCount: image.bookmark_count,
-  );
-  if (image.ai_type > 0) {
-    caller.dbManager.insertAiInfo(imageId, image.ai_type);
-  }
+  caller.dbManager.runInTransaction(() {
+    caller.dbManager.insertImage(
+      imageId,
+      resolvedArtist?.artistId ?? 0,
+      title: image.imageTitle,
+      saveName: image.imageUrls.join(','),
+      isManga: image.imageMode == 'manga' ? 'Y' : 'N',
+      caption: image.imageCaption,
+    );
+    caller.dbManager.insertDownloadMetadata(
+      imageId: imageId,
+      title: image.imageTitle,
+      caption: image.imageCaption,
+      tags: image.imageTags,
+      pages: image.imageCount,
+      worksDate: image.worksDate,
+      totalViews: image.jd_rtv,
+      totalRating: image.jd_rtc,
+      bookmarkCount: image.bookmark_count,
+    );
+    if (image.ai_type > 0) {
+      caller.dbManager.insertAiInfo(imageId, image.ai_type);
+    }
+  });
 }
 
 Future<void> processImageMetadataFromDb({

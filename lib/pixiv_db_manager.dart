@@ -122,10 +122,38 @@ class PixivDBManager {
       pixiv_helper.printAndLog('info', 'Using custom DB Path: $dbPath');
     }
     _db = sqlite3.open(dbPath);
+    // WAL + NORMAL: COMMITs survive a process kill; avoids fsync per write.
+    _db.execute('PRAGMA journal_mode = WAL');
+    _db.execute('PRAGMA synchronous = NORMAL');
     _db.execute('PRAGMA busy_timeout = ${timeoutSeconds * 1000}');
   }
 
-  void close() => _db.dispose();
+  void close() {
+    try {
+      _db.execute('PRAGMA wal_checkpoint(TRUNCATE)');
+    } catch (_) {
+      // Best-effort: a failed checkpoint at shutdown is harmless.
+    }
+    _db.dispose();
+  }
+
+  /// Run [body] in a write transaction so its writes commit atomically;
+  /// if the process dies before COMMIT, SQLite rolls the changes back.
+  T runInTransaction<T>(T Function() body) {
+    _db.execute('BEGIN IMMEDIATE');
+    try {
+      final result = body();
+      _db.execute('COMMIT');
+      return result;
+    } catch (_) {
+      try {
+        _db.execute('ROLLBACK');
+      } catch (_) {
+        // SQLite may have auto-rolled-back; swallow so original error wins.
+      }
+      rethrow;
+    }
+  }
 
   /// I. Create Database
   void createDatabase() {
@@ -435,12 +463,17 @@ class PixivDBManager {
   }
 
   void deleteImage(int imageId) {
-    _db.execute('DELETE FROM pixiv_master_image WHERE image_id = ?', [imageId]);
-    _db.execute('DELETE FROM pixiv_manga_image WHERE image_id = ?', [imageId]);
-    _db.execute('DELETE FROM pixiv_image_to_tag WHERE image_id = ?', [imageId]);
-    _db.execute(
-        'DELETE FROM pixiv_image_to_series WHERE image_id = ?', [imageId]);
-    _db.execute('DELETE FROM pixiv_ai_info WHERE image_id = ?', [imageId]);
+    runInTransaction(() {
+      _db.execute(
+          'DELETE FROM pixiv_master_image WHERE image_id = ?', [imageId]);
+      _db.execute(
+          'DELETE FROM pixiv_manga_image WHERE image_id = ?', [imageId]);
+      _db.execute(
+          'DELETE FROM pixiv_image_to_tag WHERE image_id = ?', [imageId]);
+      _db.execute(
+          'DELETE FROM pixiv_image_to_series WHERE image_id = ?', [imageId]);
+      _db.execute('DELETE FROM pixiv_ai_info WHERE image_id = ?', [imageId]);
+    });
   }
 
   /// IV. Tag CRUD
