@@ -65,26 +65,41 @@ class _Caller {
   List<dynamic> errorList = [];
 }
 
+/// Creates a temp dir, config, DB (seeded with member 99 and images 111/222),
+/// browser, and caller. Registers cleanup via [addTearDown] — no manual
+/// teardown needed in individual tests.
+Future<
+    ({
+      PixivConfig config,
+      PixivDBManager db,
+      _FakeBrowser br,
+      _Caller caller,
+    })> _makeSetup() async {
+  final tmp = Directory.systemTemp.createTempSync('dartpixiv_skip_');
+  addTearDown(() => tmp.deleteSync(recursive: true));
+
+  final config = PixivConfig();
+  await config.loadConfig('${tmp.path}/config.ini');
+  config.setValue('rootDirectory', tmp.path);
+  config.setValue('disableLog', true);
+
+  final db = PixivDBManager(
+    rootDirectory: tmp.path,
+    target: '${tmp.path}/db.sqlite',
+  )..createDatabase();
+  db.insertNewMember(99);
+  db.insertImage(111, 99, saveName: 'a.jpg', title: 'old title');
+  db.insertImage(222, 99, saveName: 'b.jpg', title: 'old title');
+
+  final br = _FakeBrowser(config);
+  final caller = _Caller(config: config, br: br, dbManager: db);
+
+  return (config: config, db: db, br: br, caller: caller);
+}
+
 void main() {
   test('processMember skips images already recorded in the DB', () async {
-    final tmp = Directory.systemTemp.createTempSync('dartpixiv_skip_');
-    addTearDown(() => tmp.deleteSync(recursive: true));
-
-    final config = PixivConfig();
-    await config.loadConfig('${tmp.path}/config.ini');
-    config.setValue('rootDirectory', tmp.path);
-    config.setValue('disableLog', true);
-
-    final db = PixivDBManager(
-      rootDirectory: tmp.path,
-      target: '${tmp.path}/db.sqlite',
-    )..createDatabase();
-    db.insertNewMember(99);
-    db.insertImage(111, 99, saveName: 'a.jpg', title: 'old title');
-    db.insertImage(222, 99, saveName: 'b.jpg', title: 'old title');
-
-    final br = _FakeBrowser(config);
-    final caller = _Caller(config: config, br: br, dbManager: db);
+    final (:config, :db, :br, :caller) = await _makeSetup();
 
     await artist_handler.processMember(
       caller: caller,
@@ -94,6 +109,22 @@ void main() {
     );
 
     expect(br.imagePageCalls, 0);
+    db.close();
+  });
+
+  test('processMember does not skip when skipKnownImages is false', () async {
+    final (:config, :db, :br, :caller) = await _makeSetup();
+
+    await expectLater(
+      artist_handler.processMember(
+        caller: caller,
+        config: config,
+        memberId: 99,
+        skipKnownImages: false,
+      ),
+      throwsStateError,
+    );
+    expect(br.imagePageCalls, greaterThan(0));
     db.close();
   });
 }

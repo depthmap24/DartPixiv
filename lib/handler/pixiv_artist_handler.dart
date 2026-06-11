@@ -78,7 +78,7 @@ Future<void> processMember({
       if (skipKnownImages &&
           caller.dbManager.selectImageByImageId(imageId) != null) {
         pixiv_helper.printAndLog(
-            null, 'Image $imageId already in DB - skipped (no local file).');
+            'info', 'Image $imageId already in DB - skipped.');
         i++;
         continue;
       }
