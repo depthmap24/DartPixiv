@@ -46,6 +46,11 @@ Future<void> processMemberMetadata({
 }
 
 /// Process a single member: fetch the image list and download each image.
+///
+/// [onImageComplete] is awaited after each image has been processed (it is
+/// not called for images skipped via [skipKnownImages]). Callers can use it
+/// to move the finished files elsewhere before the next image starts; an
+/// exception thrown by the callback aborts the member.
 Future<void> processMember({
   required dynamic caller,
   required PixivConfig config,
@@ -57,6 +62,7 @@ Future<void> processMember({
   int startPage = 1,
   int endPage = 0,
   bool skipKnownImages = false,
+  Future<void> Function(int imageId)? onImageComplete,
   void Function({String? title, String? message, dynamic type})? notifier,
 }) async {
   notifier ??= pixiv_helper.dummyNotifier;
@@ -95,6 +101,9 @@ Future<void> processMember({
         titlePrefix: titlePrefix,
         notifier: notifier,
       );
+      if (onImageComplete != null) {
+        await onImageComplete(imageId);
+      }
       await pixiv_helper.wait(result, config);
     } on PixivException catch (e) {
       pixiv_helper.printAndLog(

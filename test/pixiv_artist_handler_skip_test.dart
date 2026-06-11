@@ -52,6 +52,30 @@ class _FakeBrowser extends PixivBrowser {
   }
 }
 
+/// Browser whose image pages load fine but carry no URLs, so processImage
+/// completes without touching the network or the filesystem.
+class _NoUrlBrowser extends _FakeBrowser {
+  _NoUrlBrowser(super.config);
+
+  @override
+  Future<(PixivImage, String)> getImagePage(
+    int imageId, {
+    PixivArtist? parent,
+    bool fromBookmark = false,
+    int bookmarkCount = -1,
+    int imageResponseCount = -1,
+    int mangaSeriesOrder = -1,
+    PixivMangaSeries? mangaSeriesParent,
+    Duration? tzInfo,
+    String? dateFormat,
+    bool writeRawJSON = false,
+    bool stripHTMLTagsFromCaption = false,
+  }) async {
+    imagePageCalls++;
+    return (PixivImage(iid: imageId, parent: parent), '');
+  }
+}
+
 class _Caller {
   _Caller({required this.config, required this.br, required this.dbManager});
 
@@ -109,6 +133,44 @@ void main() {
     );
 
     expect(br.imagePageCalls, 0);
+    db.close();
+  });
+
+  test('onImageComplete fires per processed image, not for skipped ones',
+      () async {
+    final (:config, :db, br: _, :caller) = await _makeSetup();
+    final br = _NoUrlBrowser(config);
+    caller.br = br;
+    // 111 stays known (skipped); make 222 unknown so it gets processed.
+    db.raw.execute('DELETE FROM pixiv_master_image WHERE image_id = 222');
+    final completed = <int>[];
+
+    await artist_handler.processMember(
+      caller: caller,
+      config: config,
+      memberId: 99,
+      skipKnownImages: true,
+      onImageComplete: (id) async => completed.add(id),
+    );
+
+    expect(completed, [222]);
+    expect(br.imagePageCalls, 1);
+    db.close();
+  });
+
+  test('a failing onImageComplete aborts the member', () async {
+    final (:config, :db, br: _, :caller) = await _makeSetup();
+    caller.br = _NoUrlBrowser(config);
+
+    await expectLater(
+      artist_handler.processMember(
+        caller: caller,
+        config: config,
+        memberId: 99,
+        onImageComplete: (id) async => throw const FileSystemException('x'),
+      ),
+      throwsA(isA<FileSystemException>()),
+    );
     db.close();
   });
 
