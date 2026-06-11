@@ -80,6 +80,11 @@ Future<void> processMember({
 
   var i = 1;
   for (final imageId in artist.imageList) {
+    if (caller.stopRequested == true) {
+      pixiv_helper.printAndLog(
+          'info', 'Stop requested - aborting member $memberId.');
+      return;
+    }
     try {
       if (skipKnownImages &&
           caller.dbManager.selectImageByImageId(imageId) != null) {

@@ -158,6 +158,20 @@ void main() {
     db.close();
   });
 
+  test('stopRequested aborts the member before the next image', () async {
+    final (:config, :db, :br, :caller) = await _makeSetup();
+    caller.stopRequested = true;
+
+    await artist_handler.processMember(
+      caller: caller,
+      config: config,
+      memberId: 99,
+    );
+
+    expect(br.imagePageCalls, 0);
+    db.close();
+  });
+
   test('a failing onImageComplete aborts the member', () async {
     final (:config, :db, br: _, :caller) = await _makeSetup();
     caller.br = _NoUrlBrowser(config);
