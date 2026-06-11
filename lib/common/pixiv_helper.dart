@@ -111,7 +111,9 @@ String sanitizeFilename(String name, [String? rootDir]) {
       stem = stem.substring(0, stem.length - 1);
       name = stem + ext;
     }
-    name = name.replaceAll(r'\\', '/');
+    // Python's name.replace('\\', os.sep): a single backslash in the
+    // format string is the directory separator on every platform.
+    name = name.replaceAll(r'\', '/');
   }
 
   if (rootDir != null) {

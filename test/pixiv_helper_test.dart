@@ -13,6 +13,12 @@ void main() {
       final result = pixiv_helper.sanitizeFilename("it&#039;s fine.png");
       expect(result, contains("it's fine"));
     });
+
+    test('backslash in the format acts as a directory separator', () {
+      final result = pixiv_helper.sanitizeFilename(
+          r'artist (123)\456_p0 - title.jpg', '/tmp/root');
+      expect(result, '/tmp/root/artist (123)/456_p0 - title.jpg');
+    }, testOn: '!windows');
   });
 
   group('replacePathSeparator', () {
