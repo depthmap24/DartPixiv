@@ -56,6 +56,7 @@ Future<void> processMember({
   String titlePrefix = '',
   int startPage = 1,
   int endPage = 0,
+  bool skipKnownImages = false,
   void Function({String? title, String? message, dynamic type})? notifier,
 }) async {
   notifier ??= pixiv_helper.dummyNotifier;
@@ -74,6 +75,13 @@ Future<void> processMember({
   var i = 1;
   for (final imageId in artist.imageList) {
     try {
+      if (skipKnownImages &&
+          caller.dbManager.selectImageByImageId(imageId) != null) {
+        pixiv_helper.printAndLog(
+            null, 'Image $imageId already in DB - skipped (no local file).');
+        i++;
+        continue;
+      }
       pixiv_helper.printAndLog(
           null, '#$i of ${artist.imageList.length} - image_id=$imageId');
       final result = await image_handler.processImage(
