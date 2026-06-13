@@ -40,19 +40,24 @@ void main() {
     });
   });
 
-  test('page requests wait before each access after the first', () async {
-    final config = PixivConfig()..setValue('downloadDelay', 2);
+  test('page requests wait 0.5 to 5 seconds before later accesses', () async {
+    final config = PixivConfig()..setValue('downloadDelay', 5);
     var now = DateTime.utc(2026, 6, 13);
     final delays = <Duration>[];
+    final randomValues = [0, 4500].iterator;
     final client = _RecordingClient(() => now);
     final browser = PixivBrowser(
       config: config,
       cookieJar: CookieJar(),
       client: client,
-      now: () => now,
       delay: (duration) async {
         delays.add(duration);
         now = now.add(duration);
+      },
+      randomInt: (max) {
+        expect(max, 4501);
+        randomValues.moveNext();
+        return randomValues.current;
       },
     );
     addTearDown(browser.close);
@@ -63,11 +68,14 @@ void main() {
       browser.postContent('https://www.pixiv.net/ajax/three'),
     ]);
 
-    expect(delays, [const Duration(seconds: 2), const Duration(seconds: 2)]);
+    expect(delays, [
+      const Duration(milliseconds: 500),
+      const Duration(seconds: 5),
+    ]);
     expect(client.requestTimes, [
       DateTime.utc(2026, 6, 13),
-      DateTime.utc(2026, 6, 13, 0, 0, 2),
-      DateTime.utc(2026, 6, 13, 0, 0, 4),
+      DateTime.utc(2026, 6, 13, 0, 0, 0, 500),
+      DateTime.utc(2026, 6, 13, 0, 0, 5, 500),
     ]);
   });
 }

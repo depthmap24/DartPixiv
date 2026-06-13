@@ -7,6 +7,7 @@ library;
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:cookie_jar/cookie_jar.dart';
 import 'package:http/http.dart' as http;
@@ -61,10 +62,10 @@ class PixivBrowser {
   final PixivConfig config;
   final CookieJar cookieJar;
   final http.Client _client;
-  final DateTime Function() _now;
   final Future<void> Function(Duration) _delay;
+  final int Function(int max) _randomInt;
   Future<void> _pageRequestTail = Future<void>.value();
-  DateTime? _lastPageRequestAt;
+  bool _hasStartedPageRequest = false;
 
   // Simple TTL cache.
   final Map<String, _CacheEntry> _cache = {};
@@ -87,11 +88,11 @@ class PixivBrowser {
     required this.config,
     required this.cookieJar,
     http.Client? client,
-    DateTime Function()? now,
     Future<void> Function(Duration)? delay,
+    int Function(int max)? randomInt,
   })  : _client = client ?? http.Client(),
-        _now = now ?? DateTime.now,
-        _delay = delay ?? Future<void>.delayed;
+        _delay = delay ?? Future<void>.delayed,
+        _randomInt = randomInt ?? Random().nextInt;
 
   PixivOAuth get oauthManager {
     return _oauthManager ??= PixivOAuth(
@@ -229,23 +230,23 @@ class PixivBrowser {
     return response.bodyBytes;
   }
 
-  /// Keeps page/API request starts at least [PixivConfig.downloadDelay] apart.
-  /// Image-byte downloads use [downloadFile] and intentionally bypass this.
+  /// Adds a human-like pause before each page/API request after the first.
+  /// [PixivConfig.downloadDelay] is the maximum in seconds; the minimum is
+  /// 500 ms. Image-byte downloads intentionally bypass this delay.
   Future<void> _waitForPageRequestSlot() async {
     final previous = _pageRequestTail;
     final completer = Completer<void>();
     _pageRequestTail = completer.future;
     await previous;
     try {
-      final interval = Duration(seconds: config.downloadDelay);
-      final lastRequestAt = _lastPageRequestAt;
-      if (interval > Duration.zero && lastRequestAt != null) {
-        final elapsed = _now().difference(lastRequestAt);
-        if (elapsed < interval) {
-          await _delay(interval - elapsed);
-        }
+      final maximumMs = config.downloadDelay * 1000;
+      if (_hasStartedPageRequest && maximumMs > 0) {
+        final minimumMs = min(500, maximumMs);
+        final spread = maximumMs - minimumMs;
+        final delayMs = minimumMs + _randomInt(spread + 1);
+        await _delay(Duration(milliseconds: delayMs));
       }
-      _lastPageRequestAt = _now();
+      _hasStartedPageRequest = true;
     } finally {
       completer.complete();
     }
