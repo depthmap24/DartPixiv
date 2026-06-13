@@ -61,6 +61,10 @@ class PixivBrowser {
   final PixivConfig config;
   final CookieJar cookieJar;
   final http.Client _client;
+  final DateTime Function() _now;
+  final Future<void> Function(Duration) _delay;
+  Future<void> _pageRequestTail = Future<void>.value();
+  DateTime? _lastPageRequestAt;
 
   // Simple TTL cache.
   final Map<String, _CacheEntry> _cache = {};
@@ -79,8 +83,15 @@ class PixivBrowser {
   String get locale => _locale;
   bool get isLoggedInToFanbox => _isLoggedInToFanbox;
 
-  PixivBrowser({required this.config, required this.cookieJar})
-      : _client = http.Client();
+  PixivBrowser({
+    required this.config,
+    required this.cookieJar,
+    http.Client? client,
+    DateTime Function()? now,
+    Future<void> Function(Duration)? delay,
+  })  : _client = client ?? http.Client(),
+        _now = now ?? DateTime.now,
+        _delay = delay ?? Future<void>.delayed;
 
   PixivOAuth get oauthManager {
     return _oauthManager ??= PixivOAuth(
@@ -112,6 +123,7 @@ class PixivBrowser {
           'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
     }));
 
+    await _waitForPageRequestSlot();
     final streamed = await _client.send(request).timeout(
           Duration(seconds: config.timeout),
         );
@@ -166,6 +178,7 @@ class PixivBrowser {
   Future<String> getContent(String url, {Map<String, String>? headers}) async {
     final mergedHeaders = await _buildHeaders(url, headers);
     pixiv_helper.getLogger().fine('GET $url');
+    await _waitForPageRequestSlot();
     final response =
         await _client.get(Uri.parse(url), headers: mergedHeaders).timeout(
               Duration(seconds: config.timeout),
@@ -191,6 +204,7 @@ class PixivBrowser {
   }) async {
     final mergedHeaders = await _buildHeaders(url, headers);
     pixiv_helper.getLogger().fine('POST $url');
+    await _waitForPageRequestSlot();
     final response = await _client
         .post(Uri.parse(url), headers: mergedHeaders, body: body)
         .timeout(Duration(seconds: config.timeout));
@@ -213,6 +227,28 @@ class PixivBrowser {
           errorCode: PixivException.DOWNLOAD_FAILED_NETWORK);
     }
     return response.bodyBytes;
+  }
+
+  /// Keeps page/API request starts at least [PixivConfig.downloadDelay] apart.
+  /// Image-byte downloads use [downloadFile] and intentionally bypass this.
+  Future<void> _waitForPageRequestSlot() async {
+    final previous = _pageRequestTail;
+    final completer = Completer<void>();
+    _pageRequestTail = completer.future;
+    await previous;
+    try {
+      final interval = Duration(seconds: config.downloadDelay);
+      final lastRequestAt = _lastPageRequestAt;
+      if (interval > Duration.zero && lastRequestAt != null) {
+        final elapsed = _now().difference(lastRequestAt);
+        if (elapsed < interval) {
+          await _delay(interval - elapsed);
+        }
+      }
+      _lastPageRequestAt = _now();
+    } finally {
+      completer.complete();
+    }
   }
 
   Future<Map<String, String>> _buildHeaders(

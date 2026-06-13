@@ -93,6 +93,13 @@ Future<int> processImage({
       }
     }
 
+    // Do not mark a partial/failed artwork as known. processMember's
+    // skipKnownImages mode relies on pixiv_master_image, so inserting here
+    // would permanently hide the missing pages from future retry runs.
+    if (!allOk) {
+      return pixiv_constant.PIXIVUTIL_NOT_OK;
+    }
+
     if (config.writeImageInfo) {
       final infoFormat = image.imageMode == 'manga'
           ? config.filenameMangaInfoFormat
@@ -159,9 +166,7 @@ Future<int> processImage({
       }
     });
 
-    return allOk
-        ? pixiv_constant.PIXIVUTIL_OK
-        : pixiv_constant.PIXIVUTIL_NOT_OK;
+    return pixiv_constant.PIXIVUTIL_OK;
   } on PixivException catch (e) {
     pixiv_helper.printAndLog('error', 'Image $imageId failed: $e');
     return e.errorCode == PixivException.IMAGE_DELETED
@@ -224,11 +229,7 @@ Future<void> processImageMetadataFromDb({
     SELECT i.image_id
     FROM pixiv_master_image i
     LEFT JOIN pixiv_download_metadata m ON m.image_id = i.image_id
-    WHERE ? = 1
-       OR m.image_id IS NULL
-       OR COALESCE(m.title, '') = ''
-       OR COALESCE(m.caption, '') = ''
-       OR COALESCE(m.tags, '') = ''
+    WHERE ? = 1 OR m.image_id IS NULL
     ORDER BY i.image_id DESC
     ${limit > 0 ? 'LIMIT $limit' : ''}
   ''', [refreshExisting ? 1 : 0]);
@@ -243,13 +244,12 @@ Future<void> processImageMetadataFromDb({
     pixiv_helper.printAndLog(
         'info', 'Metadata refresh queue: $total artwork(s) (refresh all).');
   } else {
-    final (missing, incomplete) = _countResumeBuckets(caller);
-    if (missing + incomplete > 0) {
+    final missing = _countMissingMetadata(caller);
+    if (missing > 0) {
       pixiv_helper.printAndLog(
           'info',
-          'Resuming metadata refresh: $missing missing + $incomplete '
-              'incomplete ($total queued). Already-filled artworks are '
-              'skipped automatically.');
+          'Resuming metadata refresh: $missing missing ($total queued). '
+              'Already-filled artworks are skipped automatically.');
     } else {
       pixiv_helper.printAndLog(
           'info', 'Metadata refresh queue: $total artwork(s).');
@@ -298,18 +298,16 @@ Future<void> processImageMetadataFromDb({
           '$remaining remaining · elapsed '
           '${pixiv_helper.formatDuration(elapsed)}.');
   if (remaining > 0) {
-    pixiv_helper.printAndLog(
-        'info',
+    pixiv_helper.printAndLog('info',
         'Run --fill-metadata-from-db again to resume from the same point.');
   }
 }
 
-(int, int) _countResumeBuckets(dynamic caller) {
+int _countMissingMetadata(dynamic caller) {
   int countOf(String sql) {
     final rows = caller.dbManager.raw.select(sql);
     if (rows.isEmpty) return 0;
-    return (rows.first['c'] as int?) ??
-        int.parse('${rows.first.values.first}');
+    return (rows.first['c'] as int?) ?? int.parse('${rows.first.values.first}');
   }
 
   final missing = countOf('''
@@ -318,14 +316,7 @@ Future<void> processImageMetadataFromDb({
     LEFT JOIN pixiv_download_metadata m ON m.image_id = i.image_id
     WHERE m.image_id IS NULL
   ''');
-  final incomplete = countOf('''
-    SELECT COUNT(*) AS c
-    FROM pixiv_download_metadata
-    WHERE COALESCE(title, '') = ''
-       OR COALESCE(caption, '') = ''
-       OR COALESCE(tags, '') = ''
-  ''');
-  return (missing, incomplete);
+  return missing;
 }
 
 String _formatProgressSuffix({

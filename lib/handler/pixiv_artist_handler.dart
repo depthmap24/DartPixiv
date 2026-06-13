@@ -50,7 +50,9 @@ Future<void> processMemberMetadata({
 /// [onImageComplete] is awaited after each image has been processed (it is
 /// not called for images skipped via [skipKnownImages]). Callers can use it
 /// to move the finished files elsewhere before the next image starts; an
-/// exception thrown by the callback aborts the member.
+/// exception thrown by the callback aborts the member. When [requireComplete]
+/// is true, any failed artwork prevents the member's last-download date from
+/// advancing and throws after the full list has been checked.
 Future<void> processMember({
   required dynamic caller,
   required PixivConfig config,
@@ -62,6 +64,7 @@ Future<void> processMember({
   int startPage = 1,
   int endPage = 0,
   bool skipKnownImages = false,
+  bool requireComplete = false,
   Future<void> Function(int imageId)? onImageComplete,
   void Function({String? title, String? message, dynamic type})? notifier,
 }) async {
@@ -78,6 +81,7 @@ Future<void> processMember({
     return;
   }
 
+  final failedImages = <int>[];
   var i = 1;
   for (final imageId in artist.imageList) {
     if (caller.stopRequested == true) {
@@ -106,11 +110,16 @@ Future<void> processMember({
         titlePrefix: titlePrefix,
         notifier: notifier,
       );
-      if (onImageComplete != null) {
+      final complete = result == pixiv_constant.PIXIVUTIL_OK ||
+          result == pixiv_constant.PIXIVUTIL_SKIP_DUPLICATE ||
+          result == pixiv_constant.PIXIVUTIL_SKIP_BLACKLIST;
+      if (!complete) {
+        failedImages.add(imageId);
+      } else if (onImageComplete != null) {
         await onImageComplete(imageId);
       }
-      await pixiv_helper.wait(result, config);
     } on PixivException catch (e) {
+      failedImages.add(imageId);
       pixiv_helper.printAndLog(
           'error', 'Failed to process image $imageId: ${e.message}');
     }
@@ -119,6 +128,13 @@ Future<void> processMember({
       pixiv_helper.printAndLog('info', 'Reached page limit $endPage');
       break;
     }
+  }
+  if (requireComplete && failedImages.isNotEmpty) {
+    throw PixivException(
+      'Member $memberId incomplete; failed artwork(s): '
+      '${failedImages.join(', ')}',
+      errorCode: PixivException.DOWNLOAD_FAILED_OTHER,
+    );
   }
   caller.dbManager.updateLastDownloadedImage(memberId, artist.imageList.first);
   pixiv_helper.printAndLog('info', 'Done with member $memberId.');
