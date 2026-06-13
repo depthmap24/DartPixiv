@@ -167,6 +167,67 @@ class _PartialDownloadBrowser extends _SuccessfulBrowser {
   }
 }
 
+/// Image pages load with a real URL, but any download attempt fails the
+/// test — proves the metadata-only branch never re-downloads the image.
+class _MetadataOnlyBrowser extends _FakeBrowser {
+  _MetadataOnlyBrowser(super.config);
+
+  @override
+  Future<(PixivImage, String)> getImagePage(
+    int imageId, {
+    PixivArtist? parent,
+    bool fromBookmark = false,
+    int bookmarkCount = -1,
+    int imageResponseCount = -1,
+    int mangaSeriesOrder = -1,
+    PixivMangaSeries? mangaSeriesParent,
+    Duration? tzInfo,
+    String? dateFormat,
+    bool writeRawJSON = false,
+    bool stripHTMLTagsFromCaption = false,
+  }) async {
+    imagePageCalls++;
+    final image = PixivImage(iid: imageId, parent: parent)
+      ..imageUrls = ['https://i.pximg.net/img-original/$imageId.jpg']
+      ..imageCount = 1
+      ..imageMode = 'big'
+      ..imageTitle = 'meta $imageId'
+      ..imageCaption = ''
+      ..imageTags = []
+      ..worksDate = '2026-06-13';
+    return (image, '');
+  }
+
+  @override
+  Future<int> downloadFile(String url, String destination,
+      {Map<String, String>? headers}) async {
+    throw StateError('metadata-only branch must not download $url');
+  }
+}
+
+/// Reports the work as deleted on Pixiv when its image page is requested.
+class _DeletedMetadataBrowser extends _FakeBrowser {
+  _DeletedMetadataBrowser(super.config);
+
+  @override
+  Future<(PixivImage, String)> getImagePage(
+    int imageId, {
+    PixivArtist? parent,
+    bool fromBookmark = false,
+    int bookmarkCount = -1,
+    int imageResponseCount = -1,
+    int mangaSeriesOrder = -1,
+    PixivMangaSeries? mangaSeriesParent,
+    Duration? tzInfo,
+    String? dateFormat,
+    bool writeRawJSON = false,
+    bool stripHTMLTagsFromCaption = false,
+  }) async {
+    imagePageCalls++;
+    throw PixivException('deleted', errorCode: PixivException.IMAGE_DELETED);
+  }
+}
+
 class _Caller {
   _Caller({required this.config, required this.br, required this.dbManager});
 
@@ -248,6 +309,132 @@ void main() {
     expect(br.imagePageCalls, 1);
     expect(db.selectImageByImageId(222), isNotNull);
     expect(db.selectDownloadMetadata(222), containsPair('title', 'title 222'));
+    db.close();
+  });
+
+  test('fillMissingMetadata fetches metadata only, never re-downloading',
+      () async {
+    final (:config, :db, br: _, :caller) = await _makeSetup();
+    final br = _MetadataOnlyBrowser(config);
+    caller.br = br;
+    // _makeSetup seeds 111 and 222 with image rows but no metadata.
+    final filled = <int>[];
+    final completed = <int>[];
+
+    await artist_handler.processMember(
+      caller: caller,
+      config: config,
+      memberId: 99,
+      skipKnownImages: true,
+      fillMissingMetadata: true,
+      onImageComplete: (id) async => completed.add(id),
+      onMetadataFilled: (id) async => filled.add(id),
+    );
+
+    expect(filled, [111, 222]);
+    expect(completed, isEmpty);
+    expect(br.imagePageCalls, 2);
+    expect(db.selectDownloadMetadata(111), isNotNull);
+    expect(db.selectDownloadMetadata(222), containsPair('title', 'meta 222'));
+    db.close();
+  });
+
+  test('fillMissingMetadata skips works that already have image and metadata',
+      () async {
+    final (:config, :db, :br, :caller) = await _makeSetup();
+    for (final id in [111, 222]) {
+      db.insertDownloadMetadata(
+        imageId: id,
+        title: 'title $id',
+        caption: '',
+        tags: const [],
+        pages: 1,
+        worksDate: '2026-06-13',
+        totalViews: 0,
+        totalRating: 0,
+        bookmarkCount: 0,
+      );
+    }
+    final filled = <int>[];
+
+    await artist_handler.processMember(
+      caller: caller,
+      config: config,
+      memberId: 99,
+      skipKnownImages: true,
+      fillMissingMetadata: true,
+      onMetadataFilled: (id) async => filled.add(id),
+    );
+
+    expect(br.imagePageCalls, 0); // _FakeBrowser.getImagePage would throw
+    expect(filled, isEmpty);
+    db.close();
+  });
+
+  test('fillMissingMetadata still fully downloads a work with no image row',
+      () async {
+    final (:config, :db, br: _, :caller) = await _makeSetup();
+    final br = _SuccessfulBrowser(config);
+    caller.br = br;
+    // Give 111 metadata so it is a clean skip; remove 222's image row so it
+    // must be downloaded in full.
+    db.insertDownloadMetadata(
+      imageId: 111,
+      title: 'title 111',
+      caption: '',
+      tags: const [],
+      pages: 1,
+      worksDate: '2026-06-13',
+      totalViews: 0,
+      totalRating: 0,
+      bookmarkCount: 0,
+    );
+    db.raw.execute('DELETE FROM pixiv_master_image WHERE image_id = 222');
+    final completed = <int>[];
+    final filled = <int>[];
+
+    await artist_handler.processMember(
+      caller: caller,
+      config: config,
+      memberId: 99,
+      skipKnownImages: true,
+      fillMissingMetadata: true,
+      onImageComplete: (id) async => completed.add(id),
+      onMetadataFilled: (id) async => filled.add(id),
+    );
+
+    expect(completed, [222]);
+    expect(filled, isEmpty);
+    expect(br.imagePageCalls, 1);
+    expect(db.selectImageByImageId(222), isNotNull);
+    expect(db.selectDownloadMetadata(222), containsPair('title', 'title 222'));
+    db.close();
+  });
+
+  test('fillMissingMetadata tolerates a deleted work under requireComplete',
+      () async {
+    final (:config, :db, br: _, :caller) = await _makeSetup();
+    final br = _DeletedMetadataBrowser(config);
+    caller.br = br;
+    // 111 and 222 have image rows but no metadata; the browser reports both
+    // deleted when metadata is requested.
+    final filled = <int>[];
+
+    // Must NOT throw, even with requireComplete, because deleted works are
+    // tolerated (their image is already backed up).
+    await artist_handler.processMember(
+      caller: caller,
+      config: config,
+      memberId: 99,
+      skipKnownImages: true,
+      fillMissingMetadata: true,
+      requireComplete: true,
+      onMetadataFilled: (id) async => filled.add(id),
+    );
+
+    expect(filled, isEmpty);
+    expect(br.imagePageCalls, 2);
+    expect(db.selectMemberByMemberId(99)!.lastUpdateDate, isNotNull);
     db.close();
   });
 

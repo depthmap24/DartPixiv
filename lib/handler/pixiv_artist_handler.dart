@@ -53,6 +53,11 @@ Future<void> processMemberMetadata({
 /// exception thrown by the callback aborts the member. When [requireComplete]
 /// is true, any failed artwork prevents the member's last-download date from
 /// advancing and throws after the full list has been checked.
+/// When [fillMissingMetadata] is true, a work that already has its image but
+/// no metadata row is not skipped: its metadata is fetched on its own (one
+/// request, no image re-download) and [onMetadataFilled] is awaited on
+/// success. A work deleted on Pixiv is tolerated here (its image is already
+/// saved) and does not count against [requireComplete].
 Future<void> processMember({
   required dynamic caller,
   required PixivConfig config,
@@ -66,6 +71,8 @@ Future<void> processMember({
   bool skipKnownImages = false,
   bool requireComplete = false,
   Future<void> Function(int imageId)? onImageComplete,
+  bool fillMissingMetadata = false,
+  Future<void> Function(int imageId)? onMetadataFilled,
   void Function({String? title, String? message, dynamic type})? notifier,
 }) async {
   notifier ??= pixiv_helper.dummyNotifier;
@@ -92,8 +99,39 @@ Future<void> processMember({
     try {
       if (skipKnownImages &&
           caller.dbManager.selectImageByImageId(imageId) != null) {
-        pixiv_helper.printAndLog(
-            'info', 'Image $imageId already in DB - skipped.');
+        final hasMetadata =
+            caller.dbManager.selectDownloadMetadata(imageId) != null;
+        if (hasMetadata || !fillMissingMetadata) {
+          pixiv_helper.printAndLog(
+              'info', 'Image $imageId already in DB - skipped.');
+          i++;
+          continue;
+        }
+        // Image is saved but its metadata row is missing: fetch metadata
+        // only (one request, no image re-download) so a later run can treat
+        // the work as fully complete.
+        pixiv_helper.printAndLog('info',
+            'Image $imageId missing metadata - fetching metadata only.');
+        try {
+          await image_handler.processImageMetadata(
+            caller: caller,
+            config: config,
+            imageId: imageId,
+            notifier: notifier,
+          );
+          if (onMetadataFilled != null) {
+            await onMetadataFilled(imageId);
+          }
+        } on PixivException catch (e) {
+          if (e.errorCode == PixivException.IMAGE_DELETED) {
+            pixiv_helper.printAndLog('info',
+                'Image $imageId deleted on Pixiv - metadata skip tolerated.');
+          } else {
+            failedImages.add(imageId);
+            pixiv_helper.printAndLog('error',
+                'Failed metadata fetch for image $imageId: ${e.message}');
+          }
+        }
         i++;
         continue;
       }
