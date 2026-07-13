@@ -573,14 +573,24 @@ void printAndLog(String? level, String msg,
 }
 
 /// Wait between downloads. Used after each download.
-Future<void> wait([int? result, dynamic config]) async {
+///
+/// Upstream parity (PixivHelper.wait, issue #276): a uniform random pause of
+/// 0..downloadDelay seconds — NOT a fixed downloadDelay sleep. [delay] and
+/// [randomInt] are test seams, mirroring PixivBrowser's pacing seams.
+Future<void> wait(
+  int? result,
+  dynamic config, {
+  Future<void> Function(Duration)? delay,
+  int Function(int max)? randomInt,
+}) async {
   config ??= _config;
   if (config == null) return;
   if (result == pixiv_constant.PIXIVUTIL_SKIP_DUPLICATE_NO_WAIT) return;
 
-  final delay = (config.downloadDelay as int?) ?? 5;
-  if (delay > 0) {
-    await Future<void>.delayed(Duration(seconds: delay));
+  final maxSeconds = (config.downloadDelay as int?) ?? 5;
+  if (maxSeconds > 0) {
+    final ms = (randomInt ?? Random().nextInt)(maxSeconds * 1000);
+    await (delay ?? Future<void>.delayed)(Duration(milliseconds: ms));
   }
 }
 
